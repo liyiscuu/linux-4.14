@@ -60,6 +60,8 @@ EXPORT_SYMBOL_GPL(irqchip_fwnode_ops);
  * node is not stored. For other types the pointer is kept in the irq
  * domain struct.
  */
+
+//分配 irqchip_fwid，且设置其 name , 返回 irqchip_fwid->fwnode
 struct fwnode_handle *__irq_domain_alloc_fwnode(unsigned int type, int id,
 						const char *name, void *data)
 {
@@ -89,7 +91,10 @@ struct fwnode_handle *__irq_domain_alloc_fwnode(unsigned int type, int id,
 	fwid->type = type;
 	fwid->name = n;
 	fwid->data = data;
-	fwid->fwnode.ops = &irqchip_fwnode_ops;
+	fwid->fwnode.ops = &irqchip_fwnode_ops;  // todo: 在哪儿初始化的？
+
+	//fwnode(struct fwnode_handle) 是嵌入在 struct irqchip_fwid 中的元素，
+	//可以通过fwnode地址，反推出 irqchip_fwid
 	return &fwid->fwnode;
 }
 EXPORT_SYMBOL_GPL(__irq_domain_alloc_fwnode);
@@ -136,11 +141,13 @@ struct irq_domain *__irq_domain_add(struct fwnode_handle *fwnode, int size,
 
 	static atomic_t unknown_domains;
 
+	//分配 domain 空间，注意size是线性映射的大小，因此需要分配对应映射空间
 	domain = kzalloc_node(sizeof(*domain) + (sizeof(unsigned int) * size),
 			      GFP_KERNEL, of_node_to_nid(of_node));
 	if (WARN_ON(!domain))
 		return NULL;
 
+	//设置 domain 的名称
 	if (fwnode && is_fwnode_irqchip(fwnode)) {
 		fwid = container_of(fwnode, struct irqchip_fwid, fwnode);
 
@@ -220,7 +227,7 @@ struct irq_domain *__irq_domain_add(struct fwnode_handle *fwnode, int size,
 
 	mutex_lock(&irq_domain_mutex);
 	debugfs_add_domain_dir(domain);
-	list_add(&domain->link, &irq_domain_list);
+	list_add(&domain->link, &irq_domain_list);  //domain都挂接到 irqdomain_list 列表中
 	mutex_unlock(&irq_domain_mutex);
 
 	pr_debug("Added domain %s\n", domain->name);
@@ -319,13 +326,16 @@ struct irq_domain *irq_domain_add_simple(struct device_node *of_node,
 {
 	struct irq_domain *domain;
 
+	//先创建一个domain，hwirq的数目为 size, 都是线性映射
 	domain = __irq_domain_add(of_node_to_fwnode(of_node), size, size, 0, ops, host_data);
 	if (!domain)
 		return NULL;
 
+	//如果指定了virq,则完成hwirq 和 virq 的映射
 	if (first_irq > 0) {
 		if (IS_ENABLED(CONFIG_SPARSE_IRQ)) {
 			/* attempt to allocated irq_descs */
+			//从 指定的irq起始，申请size个 virq，得到对应的 irq_desc
 			int rc = irq_alloc_descs(first_irq, first_irq, size,
 						 of_node_to_nid(of_node));
 			if (rc < 0)
@@ -515,6 +525,7 @@ void irq_domain_disassociate(struct irq_domain *domain, unsigned int irq)
 int irq_domain_associate(struct irq_domain *domain, unsigned int virq,
 			 irq_hw_number_t hwirq)
 {
+	//irq_data 包含在irq_desc中，与irq_desc 1：1关系
 	struct irq_data *irq_data = irq_get_irq_data(virq);
 	int ret;
 
@@ -527,6 +538,8 @@ int irq_domain_associate(struct irq_domain *domain, unsigned int virq,
 		return -EINVAL;
 
 	mutex_lock(&irq_domain_mutex);
+	// 这里通过 irq_data 将 virq 和 hwirq/domain 对应起来，
+	// 注意： irq_data->irq 在 desc_set_defaults() 中设置为了对应的virq
 	irq_data->hwirq = hwirq;
 	irq_data->domain = domain;
 	if (domain->ops->map) {
